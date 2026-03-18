@@ -8,6 +8,8 @@ import re
 import struct
 import threading
 import time
+from typing import Any
+
 import transformers
 from curl_cffi import requests
 from fastapi import FastAPI, HTTPException, Request
@@ -794,14 +796,49 @@ def format_tools_for_prompt(tools: list) -> str:
     return chr(10).join(tool_schemas)
 
 
+def is_deepseek_finished_value(v_value: Any) -> bool:
+    """判断 DeepSeek 的 v 字段是否表示响应结束。"""
+    if isinstance(v_value, str):
+        return v_value.strip() == "FINISHED"
+
+    if isinstance(v_value, list):
+        return any(
+            isinstance(item, dict)
+            and item.get("p") == "status"
+            and item.get("v") == "FINISHED"
+            for item in v_value
+        )
+
+    return False
+
+
+def strip_deepseek_finished_suffix(content: str) -> str:
+    """去除响应尾部的 FINISHED 标记，保留实际内容。"""
+    cleaned_content = content.rstrip()
+    if cleaned_content.endswith("FINISHED"):
+        return cleaned_content[:-8].rstrip()
+    return cleaned_content
+
+
+def split_stream_text_for_finished_suffix(
+    pending_text: str, new_text: str
+) -> tuple[str, str]:
+    """在流式输出中保留可能属于 FINISHED 终止标记的尾部内容。"""
+    combined_text = pending_text + new_text
+    finished_marker = "FINISHED"
+    max_suffix_len = min(len(finished_marker), len(combined_text))
+
+    for suffix_len in range(max_suffix_len, 0, -1):
+        if combined_text.endswith(finished_marker[:suffix_len]):
+            return combined_text[:-suffix_len], combined_text[-suffix_len:]
+
+    return combined_text, ""
+
+
 def detect_tool_calls_in_response(content: str, tools: list) -> list:
     """从模型响应中检测工具调用"""
     detected_tools = []
-    cleaned_content = content.strip()
-
-    # 去除末尾的 FINISHED 状态标记（DeepSeek 响应格式）
-    if cleaned_content.endswith("FINISHED"):
-        cleaned_content = cleaned_content[:-8].strip()
+    cleaned_content = strip_deepseek_finished_suffix(content.strip())
 
     tool_detected = False
 
@@ -1072,6 +1109,49 @@ async def chat_completions(request: Request):
 
                     def process_data():
                         ptype = "text"
+                        pending_text = ""
+                        pending_thinking = ""
+
+                        def queue_unified_chunk(chunk_content: str, chunk_type: str):
+                            if not chunk_content:
+                                return
+
+                            unified_chunk = {
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {
+                                            "content": chunk_content,
+                                            "type": chunk_type,
+                                        },
+                                    }
+                                ],
+                                "model": "",
+                                "chunk_token_usage": len(chunk_content) // 4,
+                                "created": 0,
+                                "message_id": -1,
+                                "parent_id": -1,
+                            }
+                            result_queue.put(unified_chunk)
+
+                        def flush_pending_content(strip_suffix: bool):
+                            nonlocal pending_text, pending_thinking
+
+                            thinking_content = pending_thinking
+                            text_content = pending_text
+                            if strip_suffix:
+                                thinking_content = strip_deepseek_finished_suffix(
+                                    thinking_content
+                                )
+                                text_content = strip_deepseek_finished_suffix(
+                                    text_content
+                                )
+
+                            queue_unified_chunk(thinking_content, "thinking")
+                            queue_unified_chunk(text_content, "text")
+                            pending_thinking = ""
+                            pending_text = ""
+
                         try:
                             for raw_line in deepseek_resp.iter_lines():
                                 try:
@@ -1108,6 +1188,7 @@ async def chat_completions(request: Request):
                                 if line.startswith("data:"):
                                     data_str = line[5:].strip()
                                     if data_str == "[DONE]":
+                                        flush_pending_content(strip_suffix=True)
                                         result_queue.put(None)  # 结束信号
                                         break
                                     try:
@@ -1138,54 +1219,64 @@ async def chat_completions(request: Request):
                                             ):
                                                 ptype = "text"
 
+                                            if is_deepseek_finished_value(v_value):
+                                                flush_pending_content(strip_suffix=True)
+                                                result_queue.put(
+                                                    {
+                                                        "choices": [
+                                                            {
+                                                                "index": 0,
+                                                                "finish_reason": "stop",
+                                                            }
+                                                        ]
+                                                    }
+                                                )
+                                                result_queue.put(None)
+                                                return
+
                                             # 处理文本内容
                                             if isinstance(v_value, str):
-                                                content = v_value
-                                                # 过滤掉 FINISHED 状态字符串
-                                                if content.strip() == "FINISHED":
-                                                    continue
+                                                if ptype == "thinking":
+                                                    pending_text_content = (
+                                                        strip_deepseek_finished_suffix(
+                                                            pending_text
+                                                        )
+                                                    )
+                                                    if pending_text_content:
+                                                        queue_unified_chunk(
+                                                            pending_text_content,
+                                                            "text",
+                                                        )
+                                                        pending_text = ""
+                                                    content, pending_thinking = (
+                                                        split_stream_text_for_finished_suffix(
+                                                            pending_thinking,
+                                                            v_value,
+                                                        )
+                                                    )
+                                                else:
+                                                    pending_thinking_content = (
+                                                        strip_deepseek_finished_suffix(
+                                                            pending_thinking
+                                                        )
+                                                    )
+                                                    if pending_thinking_content:
+                                                        queue_unified_chunk(
+                                                            pending_thinking_content,
+                                                            "thinking",
+                                                        )
+                                                        pending_thinking = ""
+                                                    content, pending_text = (
+                                                        split_stream_text_for_finished_suffix(
+                                                            pending_text,
+                                                            v_value,
+                                                        )
+                                                    )
                                             # 处理数组更新如状态变更
                                             elif isinstance(v_value, list):
-                                                for item in v_value:
-                                                    if (
-                                                        item.get("p") == "status"
-                                                        and item.get("v") == "FINISHED"
-                                                    ):
-                                                        # 最终完成信号
-                                                        result_queue.put(
-                                                            {
-                                                                "choices": [
-                                                                    {
-                                                                        "index": 0,
-                                                                        "finish_reason": "stop",
-                                                                    }
-                                                                ]
-                                                            }
-                                                        )
-                                                        result_queue.put(None)
-                                                        return
                                                 continue
 
-                                            # 构造兼容原逻辑的 chunk
-                                            unified_chunk = {
-                                                "choices": [
-                                                    {
-                                                        "index": 0,
-                                                        "delta": {
-                                                            "content": content,
-                                                            "type": ptype,
-                                                        },
-                                                    }
-                                                ],
-                                                "model": "",
-                                                "chunk_token_usage": len(content)
-                                                // 4,  # 简单估算token数
-                                                "created": 0,
-                                                "message_id": -1,
-                                                "parent_id": -1,
-                                            }
-
-                                            result_queue.put(unified_chunk)
+                                            queue_unified_chunk(content, ptype)
                                     except Exception as e:
                                         logger.warning(
                                             f"[sse_stream] 无法解析: {data_str}, 错误: {e}"
@@ -1472,11 +1563,95 @@ async def chat_completions(request: Request):
                                     ):
                                         ptype = "text"
 
+                                    if is_deepseek_finished_value(v_value):
+                                        final_reasoning = "".join(think_list)
+                                        final_content = strip_deepseek_finished_suffix(
+                                            "".join(text_list)
+                                        )
+                                        prompt_tokens = len(final_prompt) // 4
+                                        reasoning_tokens = len(final_reasoning) // 4
+                                        completion_tokens = len(final_content) // 4
+
+                                        detected_tools = []
+                                        finish_reason = "stop"
+                                        message_content = final_content
+                                        tool_calls_response = None
+
+                                        if tools and len(tools) > 0:
+                                            detected_tools = (
+                                                detect_tool_calls_in_response(
+                                                    final_content, tools
+                                                )
+                                            )
+                                            if detected_tools:
+                                                finish_reason = "tool_calls"
+                                                tool_calls_response = []
+                                                for tool_info in detected_tools:
+                                                    tool_call_id = (
+                                                        generate_tool_call_id()
+                                                    )
+                                                    tool_calls_response.append(
+                                                        {
+                                                            "id": tool_call_id,
+                                                            "type": "function",
+                                                            "function": {
+                                                                "name": tool_info[
+                                                                    "name"
+                                                                ],
+                                                                "arguments": json.dumps(
+                                                                    tool_info.get(
+                                                                        "input", {}
+                                                                    ),
+                                                                    ensure_ascii=False,
+                                                                ),
+                                                            },
+                                                        }
+                                                    )
+                                                message_content = None
+
+                                        message_obj: dict[str, Any] = {
+                                            "role": "assistant",
+                                        }
+                                        if message_content is not None:
+                                            message_obj["content"] = message_content
+                                        if final_reasoning:
+                                            message_obj["reasoning_content"] = (
+                                                final_reasoning
+                                            )
+                                        if tool_calls_response:
+                                            message_obj["tool_calls"] = (
+                                                tool_calls_response
+                                            )
+
+                                        result = {
+                                            "id": completion_id,
+                                            "object": "chat.completion",
+                                            "created": created_time,
+                                            "model": model,
+                                            "choices": [
+                                                {
+                                                    "index": 0,
+                                                    "message": message_obj,
+                                                    "finish_reason": finish_reason,
+                                                }
+                                            ],
+                                            "usage": {
+                                                "prompt_tokens": prompt_tokens,
+                                                "completion_tokens": reasoning_tokens
+                                                + completion_tokens,
+                                                "total_tokens": prompt_tokens
+                                                + reasoning_tokens
+                                                + completion_tokens,
+                                                "completion_tokens_details": {
+                                                    "reasoning_tokens": reasoning_tokens
+                                                },
+                                            },
+                                        }
+                                        data_queue.put("DONE")
+                                        return
+
                                     # 处理字符串形式的 v 值（即文本内容）
                                     if isinstance(v_value, str):
-                                        # 过滤掉 FINISHED 状态字符串
-                                        if v_value.strip() == "FINISHED":
-                                            continue
                                         if search_enabled and v_value.startswith(
                                             "[citation:"
                                         ):
@@ -1485,109 +1660,8 @@ async def chat_completions(request: Request):
                                             think_list.append(v_value)
                                         else:
                                             text_list.append(v_value)
-
-                                    # 处理数组更新如状态变更
                                     elif isinstance(v_value, list):
-                                        for item in v_value:
-                                            if (
-                                                item.get("p") == "status"
-                                                and item.get("v") == "FINISHED"
-                                            ):
-                                                # 构建最终结果
-                                                final_reasoning = "".join(think_list)
-                                                final_content = "".join(text_list)
-                                                prompt_tokens = (
-                                                    len(final_prompt) // 4
-                                                )  # 简单估算token数
-                                                reasoning_tokens = (
-                                                    len(final_reasoning) // 4
-                                                )  # 简单估算token数
-                                                completion_tokens = (
-                                                    len(final_content) // 4
-                                                )  # 简单估算token数
-
-                                                # 检测工具调用
-                                                detected_tools = []
-                                                finish_reason = "stop"
-                                                message_content = final_content
-                                                tool_calls_response = None
-
-                                                if tools and len(tools) > 0:
-                                                    detected_tools = (
-                                                        detect_tool_calls_in_response(
-                                                            final_content, tools
-                                                        )
-                                                    )
-                                                    if detected_tools:
-                                                        finish_reason = "tool_calls"
-                                                        tool_calls_response = []
-                                                        for tool_info in detected_tools:
-                                                            tool_call_id = (
-                                                                generate_tool_call_id()
-                                                            )
-                                                            tool_calls_response.append(
-                                                                {
-                                                                    "id": tool_call_id,
-                                                                    "type": "function",
-                                                                    "function": {
-                                                                        "name": tool_info[
-                                                                            "name"
-                                                                        ],
-                                                                        "arguments": json.dumps(
-                                                                            tool_info.get(
-                                                                                "input",
-                                                                                {},
-                                                                            ),
-                                                                            ensure_ascii=False,
-                                                                        ),
-                                                                    },
-                                                                }
-                                                            )
-                                                        # 工具调用时 content 设为 None
-                                                        message_content = None
-
-                                                message_obj = {
-                                                    "role": "assistant",
-                                                }
-                                                if message_content is not None:
-                                                    message_obj["content"] = (
-                                                        message_content
-                                                    )
-                                                if final_reasoning:
-                                                    message_obj["reasoning_content"] = (
-                                                        final_reasoning
-                                                    )
-                                                if tool_calls_response:
-                                                    message_obj["tool_calls"] = (
-                                                        tool_calls_response
-                                                    )
-
-                                                result = {
-                                                    "id": completion_id,
-                                                    "object": "chat.completion",
-                                                    "created": created_time,
-                                                    "model": model,
-                                                    "choices": [
-                                                        {
-                                                            "index": 0,
-                                                            "message": message_obj,
-                                                            "finish_reason": finish_reason,
-                                                        }
-                                                    ],
-                                                    "usage": {
-                                                        "prompt_tokens": prompt_tokens,
-                                                        "completion_tokens": reasoning_tokens
-                                                        + completion_tokens,
-                                                        "total_tokens": prompt_tokens
-                                                        + reasoning_tokens
-                                                        + completion_tokens,
-                                                        "completion_tokens_details": {
-                                                            "reasoning_tokens": reasoning_tokens
-                                                        },
-                                                    },
-                                                }
-                                                data_queue.put("DONE")
-                                                return  # 提前返回，结束函数
+                                        continue
 
                             except Exception as e:
                                 logger.warning(
@@ -1612,7 +1686,9 @@ async def chat_completions(request: Request):
                     deepseek_resp.close()
                     if result is None:
                         # 如果没有提前构造 result，则构造默认结果
-                        final_content = "".join(text_list)
+                        final_content = strip_deepseek_finished_suffix(
+                            "".join(text_list)
+                        )
                         final_reasoning = "".join(
                             think_list
                         )  # 修复：应该使用think_list而不是text_list
@@ -1650,7 +1726,7 @@ async def chat_completions(request: Request):
                                     )
                                 message_content = None
 
-                        message_obj = {
+                        message_obj: dict[str, Any] = {
                             "role": "assistant",
                         }
                         if message_content is not None:
@@ -1887,17 +1963,13 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
 
                             try:
                                 chunk = json.loads(data_str)
-                                if "v" in chunk and isinstance(chunk["v"], str):
-                                    full_response_text += chunk["v"]
-                                elif "v" in chunk and isinstance(chunk["v"], list):
-                                    # 检查完成状态
-                                    for item in chunk["v"]:
-                                        if (
-                                            item.get("p") == "status"
-                                            and item.get("v") == "FINISHED"
-                                        ):
-                                            response_completed = True
-                                            break
+                                if "v" in chunk:
+                                    v_value = chunk["v"]
+                                    if is_deepseek_finished_value(v_value):
+                                        response_completed = True
+                                        break
+                                    if isinstance(v_value, str):
+                                        full_response_text += v_value
                             except (json.JSONDecodeError, KeyError):
                                 continue
 
@@ -1923,11 +1995,10 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                     detected_tools = []
 
                     # 清理响应文本
+                    full_response_text = strip_deepseek_finished_suffix(
+                        full_response_text
+                    )
                     cleaned_response = full_response_text.strip()
-
-                    # 去除末尾的 FINISHED 状态标记（DeepSeek 响应格式）
-                    if cleaned_response.endswith("FINISHED"):
-                        cleaned_response = cleaned_response[:-8].strip()
 
                     # 记录原始响应用于调试
                     logger.debug(
@@ -2116,25 +2187,17 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                                 ):
                                     ptype = "text"
 
+                                if is_deepseek_finished_value(v_value):
+                                    break
+
                                 # 处理字符串形式的 v 值（即文本内容）
                                 if isinstance(v_value, str):
-                                    # 过滤掉 FINISHED 状态字符串
-                                    if v_value.strip() == "FINISHED":
-                                        continue
                                     if ptype == "thinking":
                                         final_reasoning += v_value
                                     else:
                                         final_content += v_value
-
-                                # 处理数组更新如状态变更
                                 elif isinstance(v_value, list):
-                                    for item in v_value:
-                                        if (
-                                            item.get("p") == "status"
-                                            and item.get("v") == "FINISHED"
-                                        ):
-                                            # 完成标志
-                                            break
+                                    continue
 
                         except json.JSONDecodeError as e:
                             logger.warning(
@@ -2152,13 +2215,10 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
 
                 # 检查是否包含工具调用 - 改进的检测逻辑
                 detected_tools = []
+                final_content = strip_deepseek_finished_suffix(final_content)
 
                 # 清理响应文本
-                cleaned_content = final_content.strip()
-
-                # 去除末尾的 FINISHED 状态标记（DeepSeek 响应格式）
-                if cleaned_content.endswith("FINISHED"):
-                    cleaned_content = cleaned_content[:-8].strip()
+                cleaned_content = strip_deepseek_finished_suffix(final_content.strip())
 
                 # 尝试多种工具调用检测方法
                 tool_detected = False
