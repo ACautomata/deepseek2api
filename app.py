@@ -1141,6 +1141,9 @@ async def chat_completions(request: Request):
                                             # 处理文本内容
                                             if isinstance(v_value, str):
                                                 content = v_value
+                                                # 过滤掉 FINISHED 状态字符串
+                                                if content.strip() == "FINISHED":
+                                                    continue
                                             # 处理数组更新如状态变更
                                             elif isinstance(v_value, list):
                                                 for item in v_value:
@@ -1471,6 +1474,9 @@ async def chat_completions(request: Request):
 
                                     # 处理字符串形式的 v 值（即文本内容）
                                     if isinstance(v_value, str):
+                                        # 过滤掉 FINISHED 状态字符串
+                                        if v_value.strip() == "FINISHED":
+                                            continue
                                         if search_enabled and v_value.startswith(
                                             "[citation:"
                                         ):
@@ -2112,6 +2118,9 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
 
                                 # 处理字符串形式的 v 值（即文本内容）
                                 if isinstance(v_value, str):
+                                    # 过滤掉 FINISHED 状态字符串
+                                    if v_value.strip() == "FINISHED":
+                                        continue
                                     if ptype == "thinking":
                                         final_reasoning += v_value
                                     else:
