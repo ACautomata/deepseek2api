@@ -798,6 +798,11 @@ def detect_tool_calls_in_response(content: str, tools: list) -> list:
     """从模型响应中检测工具调用"""
     detected_tools = []
     cleaned_content = content.strip()
+
+    # 去除末尾的 FINISHED 状态标记（DeepSeek 响应格式）
+    if cleaned_content.endswith("FINISHED"):
+        cleaned_content = cleaned_content[:-8].strip()
+
     tool_detected = False
 
     # 方法1: 检测完整的JSON格式
@@ -1914,6 +1919,10 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                     # 清理响应文本
                     cleaned_response = full_response_text.strip()
 
+                    # 去除末尾的 FINISHED 状态标记（DeepSeek 响应格式）
+                    if cleaned_response.endswith("FINISHED"):
+                        cleaned_response = cleaned_response[:-8].strip()
+
                     # 记录原始响应用于调试
                     logger.debug(
                         f"[Tool Detection] Raw response: {cleaned_response[:500] if cleaned_response else 'Empty'}"
@@ -2137,6 +2146,10 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
 
                 # 清理响应文本
                 cleaned_content = final_content.strip()
+
+                # 去除末尾的 FINISHED 状态标记（DeepSeek 响应格式）
+                if cleaned_content.endswith("FINISHED"):
+                    cleaned_content = cleaned_content[:-8].strip()
 
                 # 尝试多种工具调用检测方法
                 tool_detected = False
