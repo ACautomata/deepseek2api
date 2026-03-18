@@ -158,7 +158,12 @@ def login_deepseek_via_account(account):
             "os": "android",
         }
     try:
-        resp = requests.post(DEEPSEEK_LOGIN_URL, headers=BASE_HEADERS, json=payload, impersonate="safari15_3")
+        resp = requests.post(
+            DEEPSEEK_LOGIN_URL,
+            headers=BASE_HEADERS,
+            json=payload,
+            impersonate="safari15_3",
+        )
         resp.raise_for_status()
     except Exception as e:
         logger.error(f"[login_deepseek_via_account] 登录请求异常: {e}")
@@ -203,7 +208,7 @@ def choose_new_account(exclude_ids=None):
     """
     if exclude_ids is None:
         exclude_ids = []
-        
+
     for i in range(len(account_queue)):
         acc = account_queue[i]
         acc_id = get_account_identifier(acc)
@@ -301,29 +306,29 @@ def convert_claude_to_deepseek(claude_request):
     """将Claude格式的请求转换为DeepSeek格式（基于现有OpenAI接口）"""
     messages = claude_request.get("messages", [])
     model = claude_request.get("model", CLAUDE_DEFAULT_MODEL)
-    
+
     # 从配置文件读取Claude模型映射
-    claude_mapping = CONFIG.get("claude_model_mapping", {
-        "fast": "deepseek-chat",
-        "slow": "deepseek-chat"
-    })
-    
+    claude_mapping = CONFIG.get(
+        "claude_model_mapping", {"fast": "deepseek-chat", "slow": "deepseek-chat"}
+    )
+
     # Claude模型映射到DeepSeek模型 - 基于配置和模型特征判断
-    if "opus" in model.lower() or "reasoner" in model.lower() or "slow" in model.lower():
+    if (
+        "opus" in model.lower()
+        or "reasoner" in model.lower()
+        or "slow" in model.lower()
+    ):
         deepseek_model = claude_mapping.get("slow", "deepseek-chat")
     else:
         deepseek_model = claude_mapping.get("fast", "deepseek-chat")
-    
-    deepseek_request = {
-        "model": deepseek_model,
-        "messages": messages.copy()
-    }
-    
+
+    deepseek_request = {"model": deepseek_model, "messages": messages.copy()}
+
     # 处理system消息 - 将system参数转换为system role消息
     if "system" in claude_request:
         system_msg = {"role": "system", "content": claude_request["system"]}
         deepseek_request["messages"].insert(0, system_msg)
-    
+
     # 添加可选参数
     if "temperature" in claude_request:
         deepseek_request["temperature"] = claude_request["temperature"]
@@ -333,25 +338,21 @@ def convert_claude_to_deepseek(claude_request):
         deepseek_request["stop"] = claude_request["stop_sequences"]
     if "stream" in claude_request:
         deepseek_request["stream"] = claude_request["stream"]
-        
+
     return deepseek_request
 
 
-def convert_deepseek_to_claude_format(deepseek_response, original_claude_model=CLAUDE_DEFAULT_MODEL):
+def convert_deepseek_to_claude_format(
+    deepseek_response, original_claude_model=CLAUDE_DEFAULT_MODEL
+):
     """将DeepSeek响应转换为Claude格式的OpenAI响应"""
     # DeepSeek响应已经是OpenAI格式，只需要修改模型名称
     if isinstance(deepseek_response, dict):
         claude_response = deepseek_response.copy()
         claude_response["model"] = original_claude_model
         return claude_response
-    
+
     return deepseek_response
-
-
-
-
-
-
 
 
 # ----------------------------------------------------------------------
@@ -361,25 +362,25 @@ async def call_claude_via_openai(request: Request, claude_payload):
     """通过现有OpenAI接口调用Claude（实际调用DeepSeek）"""
     # 将Claude请求转换为DeepSeek请求
     deepseek_payload = convert_claude_to_deepseek(claude_payload)
-    
+
     # 直接调用现有的chat_completions逻辑
     try:
         # 使用现有的逻辑创建session和pow
         session_id = create_session(request)
         if not session_id:
             raise HTTPException(status_code=401, detail="invalid token.")
-        
+
         pow_resp = get_pow_response(request)
         if not pow_resp:
             raise HTTPException(
                 status_code=401,
                 detail="Failed to get PoW (invalid token or unknown error).",
             )
-        
+
         # 准备DeepSeek API调用
         model = deepseek_payload.get("model", "deepseek-chat")
         messages = deepseek_payload.get("messages", [])
-        
+
         # 判断模型特性
         model_lower = model.lower()
         if model_lower in ["deepseek-v3", "deepseek-chat"]:
@@ -397,10 +398,10 @@ async def call_claude_via_openai(request: Request, claude_payload):
         else:
             thinking_enabled = False
             search_enabled = False
-        
+
         # 使用 messages_prepare 函数构造最终 prompt
         final_prompt = messages_prepare(messages)
-        
+
         headers = {**get_auth_headers(request), "x-ds-pow-response": pow_resp}
         payload = {
             "chat_session_id": session_id,
@@ -413,7 +414,7 @@ async def call_claude_via_openai(request: Request, claude_payload):
 
         deepseek_resp = call_completion_endpoint(payload, headers, max_attempts=3)
         return deepseek_resp
-        
+
     except Exception as e:
         logger.error(f"[call_claude_via_openai] 调用失败: {e}")
         return None
@@ -427,7 +428,11 @@ def call_completion_endpoint(payload, headers, max_attempts=3):
     while attempts < max_attempts:
         try:
             deepseek_resp = requests.post(
-                DEEPSEEK_COMPLETION_URL, headers=headers, json=payload, stream=True, impersonate="safari15_3"
+                DEEPSEEK_COMPLETION_URL,
+                headers=headers,
+                json=payload,
+                stream=True,
+                impersonate="safari15_3",
             )
         except Exception as e:
             logger.warning(f"[call_completion_endpoint] 请求异常: {e}")
@@ -455,7 +460,10 @@ def create_session(request: Request, max_attempts=3):
         headers = get_auth_headers(request)
         try:
             resp = requests.post(
-                DEEPSEEK_CREATE_SESSION_URL, headers=headers, json={"agent": "chat"}, impersonate="safari15_3"
+                DEEPSEEK_CREATE_SESSION_URL,
+                headers=headers,
+                json={"agent": "chat"},
+                impersonate="safari15_3",
             )
         except Exception as e:
             logger.error(f"[create_session] 请求异常: {e}")
@@ -464,7 +472,7 @@ def create_session(request: Request, max_attempts=3):
         try:
             logger.warning(f"[create_session] {resp.text}")
             data = resp.json()
-            
+
         except Exception as e:
             logger.error(f"[create_session] JSON解析异常: {e}")
             data = {}
@@ -758,29 +766,166 @@ def list_claude_models():
 
 
 # ----------------------------------------------------------------------
+# Tool Calling 辅助函数
+# ----------------------------------------------------------------------
+def format_tools_for_prompt(tools: list) -> str:
+    """将 OpenAI 格式的 tools 转换为系统提示中的工具描述"""
+    tool_schemas = []
+    for tool in tools:
+        if tool.get("type") != "function":
+            continue
+        func = tool.get("function", {})
+        tool_name = func.get("name", "unknown")
+        tool_desc = func.get("description", "No description available")
+        schema = func.get("parameters", {})
+
+        tool_info = f"Tool: {tool_name}\nDescription: {tool_desc}"
+        if "properties" in schema:
+            props = []
+            required = schema.get("required", [])
+            for prop_name, prop_info in schema["properties"].items():
+                prop_type = prop_info.get("type", "string")
+                is_req = " (required)" if prop_name in required else ""
+                props.append(f"  - {prop_name}: {prop_type}{is_req}")
+            if props:
+                tool_info += f"\nParameters:\n{chr(10).join(props)}"
+        tool_schemas.append(tool_info)
+
+    return chr(10).join(tool_schemas)
+
+
+def detect_tool_calls_in_response(content: str, tools: list) -> list:
+    """从模型响应中检测工具调用"""
+    detected_tools = []
+    cleaned_content = content.strip()
+    tool_detected = False
+
+    # 方法1: 检测完整的JSON格式
+    if cleaned_content.startswith('{"tool_calls":') and cleaned_content.endswith("]}"):
+        try:
+            tool_data = json.loads(cleaned_content)
+            for tool_call in tool_data.get("tool_calls", []):
+                tool_name = tool_call.get("name")
+                tool_input = tool_call.get("input", {})
+                # 检查是否是有效的工具名称
+                if any(t.get("function", {}).get("name") == tool_name for t in tools):
+                    detected_tools.append({"name": tool_name, "input": tool_input})
+                    tool_detected = True
+        except json.JSONDecodeError:
+            pass
+
+    # 方法2: 使用正则表达式检测嵌入的JSON
+    if not tool_detected:
+        tool_call_pattern = r'\{\s*["\']tool_calls["\']\s*:\s*\[(.*?)\]\s*\}'
+        matches = re.findall(tool_call_pattern, cleaned_content, re.DOTALL)
+
+        for match in matches:
+            try:
+                tool_calls_json = f'{{"tool_calls": [{match}]}}'
+                tool_data = json.loads(tool_calls_json)
+
+                for tool_call in tool_data.get("tool_calls", []):
+                    tool_name = tool_call.get("name")
+                    tool_input = tool_call.get("input", {})
+
+                    if any(
+                        t.get("function", {}).get("name") == tool_name for t in tools
+                    ):
+                        detected_tools.append({"name": tool_name, "input": tool_input})
+                        tool_detected = True
+            except json.JSONDecodeError:
+                continue
+
+    return detected_tools
+
+
+def generate_tool_call_id() -> str:
+    """生成唯一的 tool call ID"""
+    return f"call_{int(time.time())}_{random.randint(100000, 999999)}"
+
+
+# ----------------------------------------------------------------------
 # 消息预处理函数，将多轮对话合并成最终 prompt
 # ----------------------------------------------------------------------
-def messages_prepare(messages: list) -> str:
+def messages_prepare(
+    messages: list, tools: list = None, tool_choice: str = "auto"
+) -> str:
     """处理消息列表，合并连续相同角色的消息，并添加角色标签：
     - 对于 assistant 消息，加上 <｜Assistant｜> 前缀及 <｜end▁of▁sentence｜> 结束标签；
     - 对于 user/system 消息（除第一条外）加上 <｜User｜> 前缀；
     - 如果消息 content 为数组，则提取其中 type 为 "text" 的部分；
+    - 处理 tool_calls 和 tool 结果消息；
     - 最后移除 markdown 图片格式的内容。
     """
     processed = []
     for m in messages:
         role = m.get("role", "")
         content = m.get("content", "")
+        tool_calls = m.get("tool_calls")
+        tool_call_id = m.get("tool_call_id")
+
+        # 处理 tool 结果消息
+        if role == "tool" and tool_call_id:
+            text = f"[Tool Result for {tool_call_id}]: {content if content else ''}"
+            processed.append({"role": "user", "text": text})
+            continue
+
+        # 处理带有 tool_calls 的 assistant 消息
+        if role == "assistant" and tool_calls:
+            tool_texts = []
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                name = func.get("name", "unknown")
+                args = func.get("arguments", "{}")
+                tool_texts.append(f"Tool Call: {name}({args})")
+            text = "\n".join(tool_texts)
+            if content:
+                text = f"{content}\n{text}"
+            processed.append({"role": "assistant", "text": text})
+            continue
+
+        # 处理普通消息
         if isinstance(content, list):
             texts = [
                 item.get("text", "") for item in content if item.get("type") == "text"
             ]
             text = "\n".join(texts)
+        elif content is None:
+            text = ""
         else:
             text = str(content)
         processed.append({"role": role, "text": text})
+
     if not processed:
         return ""
+
+    # 如果有 tools 定义，添加工具使用指导的系统消息
+    if tools and len(tools) > 0:
+        tools_description = format_tools_for_prompt(tools)
+        tool_instruction = f"""You have access to these tools:
+
+{tools_description}
+
+When you need to use tools, respond with a JSON in this exact format:
+{{"tool_calls": [{{"name": "tool_name", "input": {{"param": "value"}}}}]}}
+
+IMPORTANT: 
+- Output ONLY the JSON when calling tools, no other text.
+- The response must start with {{ and end with ]}}.
+- You can call multiple tools in ONE response by adding more objects to the tool_calls array.
+- If tool_choice is "none", do not call any tools and respond normally."""
+
+        # 检查是否已有系统消息
+        has_system = any(m["role"] == "system" for m in processed)
+        if not has_system:
+            processed.insert(0, {"role": "system", "text": tool_instruction})
+        else:
+            # 追加到现有系统消息
+            for m in processed:
+                if m["role"] == "system":
+                    m["text"] = m["text"] + "\n\n" + tool_instruction
+                    break
+
     # 合并连续同一角色的消息
     merged = [processed[0]]
     for msg in processed[1:]:
@@ -788,6 +933,7 @@ def messages_prepare(messages: list) -> str:
             merged[-1]["text"] += "\n\n" + msg["text"]
         else:
             merged.append(msg)
+
     # 添加标签
     parts = []
     for idx, block in enumerate(merged):
@@ -834,10 +980,29 @@ async def chat_completions(request: Request):
         req_data = await request.json()
         model = req_data.get("model")
         messages = req_data.get("messages", [])
+        tools = req_data.get("tools", [])
+        tool_choice = req_data.get("tool_choice", "auto")
+
         if not model or not messages:
             raise HTTPException(
                 status_code=400, detail="Request must include 'model' and 'messages'."
             )
+
+        # 处理 tool_choice 参数
+        if tool_choice not in ["auto", "none"]:
+            if isinstance(tool_choice, dict):
+                # 支持指定具体函数: {"type": "function", "function": {"name": "xxx"}}
+                # 暂不支持，返回 400
+                raise HTTPException(
+                    status_code=400,
+                    detail="Specific function tool_choice is not supported. Use 'auto' or 'none'.",
+                )
+            elif tool_choice == "required":
+                raise HTTPException(
+                    status_code=400,
+                    detail="tool_choice='required' is not supported. Use 'auto' or 'none'.",
+                )
+
         # 判断是否启用"思考"或"搜索"功能（这里根据模型名称判断）
         model_lower = model.lower()
         if model_lower in ["deepseek-v3", "deepseek-chat"]:
@@ -856,8 +1021,8 @@ async def chat_completions(request: Request):
             raise HTTPException(
                 status_code=503, detail=f"Model '{model}' is not available."
             )
-        # 使用 messages_prepare 函数构造最终 prompt
-        final_prompt = messages_prepare(messages)
+        # 使用 messages_prepare 函数构造最终 prompt（传入 tools 和 tool_choice）
+        final_prompt = messages_prepare(messages, tools, tool_choice)
         session_id = create_session(request)
         if not session_id:
             raise HTTPException(status_code=401, detail="invalid token.")
@@ -909,14 +1074,28 @@ async def chat_completions(request: Request):
                                 except Exception as e:
                                     logger.warning(f"[sse_stream] 解码失败: {e}")
                                     # 根据当前模式决定错误消息类型
-                                    error_type = "thinking" if ptype == "thinking" else "text"
+                                    error_type = (
+                                        "thinking" if ptype == "thinking" else "text"
+                                    )
                                     busy_content_str = f'{{"choices":[{{"index":0,"delta":{{"content":"解码失败，请稍候再试","type":"{error_type}"}}}}],"model":"","chunk_token_usage":1,"created":0,"message_id":-1,"parent_id":-1}}'
                                     try:
                                         busy_content = json.loads(busy_content_str)
                                         result_queue.put(busy_content)
                                     except json.JSONDecodeError:
                                         # 如果JSON解析也失败，创建最基本的错误响应
-                                        result_queue.put({"choices": [{"index": 0, "delta": {"content": "解码失败", "type": "text"}}]})
+                                        result_queue.put(
+                                            {
+                                                "choices": [
+                                                    {
+                                                        "index": 0,
+                                                        "delta": {
+                                                            "content": "解码失败",
+                                                            "type": "text",
+                                                        },
+                                                    }
+                                                ]
+                                            }
+                                        )
                                     result_queue.put(None)
                                     break
                                 if not line:
@@ -928,19 +1107,30 @@ async def chat_completions(request: Request):
                                         break
                                     try:
                                         chunk = json.loads(data_str)
-                                        
+
                                         if "v" in chunk:
                                             v_value = chunk["v"]
-                                            
+
                                             # 构造新的 delta 格式的 chunk
                                             content = ""
 
-                                            if "p" in chunk and chunk.get("p") == "response/search_status":
+                                            if (
+                                                "p" in chunk
+                                                and chunk.get("p")
+                                                == "response/search_status"
+                                            ):
                                                 continue
-                                                
-                                            if "p" in chunk and chunk.get("p") == "response/thinking_content":
+
+                                            if (
+                                                "p" in chunk
+                                                and chunk.get("p")
+                                                == "response/thinking_content"
+                                            ):
                                                 ptype = "thinking"
-                                            elif "p" in chunk and chunk.get("p") == "response/content":
+                                            elif (
+                                                "p" in chunk
+                                                and chunk.get("p") == "response/content"
+                                            ):
                                                 ptype = "text"
 
                                             # 处理文本内容
@@ -949,57 +1139,98 @@ async def chat_completions(request: Request):
                                             # 处理数组更新如状态变更
                                             elif isinstance(v_value, list):
                                                 for item in v_value:
-                                                    if item.get("p") == "status" and item.get("v") == "FINISHED":
+                                                    if (
+                                                        item.get("p") == "status"
+                                                        and item.get("v") == "FINISHED"
+                                                    ):
                                                         # 最终完成信号
-                                                        result_queue.put({"choices": [{"index": 0, "finish_reason": "stop"}]})
+                                                        result_queue.put(
+                                                            {
+                                                                "choices": [
+                                                                    {
+                                                                        "index": 0,
+                                                                        "finish_reason": "stop",
+                                                                    }
+                                                                ]
+                                                            }
+                                                        )
                                                         result_queue.put(None)
                                                         return
                                                 continue
-                                            
+
                                             # 构造兼容原逻辑的 chunk
                                             unified_chunk = {
-                                                "choices": [{
-                                                    "index": 0,
-                                                    "delta": {
-                                                        "content": content,
-                                                        "type": ptype
+                                                "choices": [
+                                                    {
+                                                        "index": 0,
+                                                        "delta": {
+                                                            "content": content,
+                                                            "type": ptype,
+                                                        },
                                                     }
-                                                }],
+                                                ],
                                                 "model": "",
-                                                "chunk_token_usage": len(content) // 4,  # 简单估算token数
+                                                "chunk_token_usage": len(content)
+                                                // 4,  # 简单估算token数
                                                 "created": 0,
                                                 "message_id": -1,
-                                                "parent_id": -1
+                                                "parent_id": -1,
                                             }
-                    
+
                                             result_queue.put(unified_chunk)
                                     except Exception as e:
                                         logger.warning(
                                             f"[sse_stream] 无法解析: {data_str}, 错误: {e}"
                                         )
                                         # 根据当前模式决定错误消息类型
-                                        error_type = "thinking" if ptype == "thinking" else "text"
+                                        error_type = (
+                                            "thinking"
+                                            if ptype == "thinking"
+                                            else "text"
+                                        )
                                         busy_content_str = f'{{"choices":[{{"index":0,"delta":{{"content":"解析失败，请稍候再试","type":"{error_type}"}}}}],"model":"","chunk_token_usage":1,"created":0,"message_id":-1,"parent_id":-1}}'
                                         try:
                                             busy_content = json.loads(busy_content_str)
                                             result_queue.put(busy_content)
                                         except json.JSONDecodeError:
                                             # 如果JSON解析也失败，创建最基本的错误响应
-                                            result_queue.put({"choices": [{"index": 0, "delta": {"content": "解析失败", "type": "text"}}]})
+                                            result_queue.put(
+                                                {
+                                                    "choices": [
+                                                        {
+                                                            "index": 0,
+                                                            "delta": {
+                                                                "content": "解析失败",
+                                                                "type": "text",
+                                                            },
+                                                        }
+                                                    ]
+                                                }
+                                            )
                                         result_queue.put(None)
                                         break
                         except Exception as e:
                             logger.warning(f"[sse_stream] 错误: {e}")
                             # 创建基本的错误响应，不依赖JSON解析
                             try:
-                                error_response = {"choices": [{"index": 0, "delta": {"content": "服务器错误，请稍候再试", "type": "text"}}]}
+                                error_response = {
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "delta": {
+                                                "content": "服务器错误，请稍候再试",
+                                                "type": "text",
+                                            },
+                                        }
+                                    ]
+                                }
                                 result_queue.put(error_response)
                             except Exception:
                                 # 最终备选方案
                                 pass
                             result_queue.put(None)
                             # raise HTTPException(
-                                # status_code=500, detail="Server is error."
+                            # status_code=500, detail="Server is error."
                             # )
                         finally:
                             deepseek_resp.close()
@@ -1010,7 +1241,6 @@ async def chat_completions(request: Request):
                     while True:
                         current_time = time.time()
                         if current_time - last_send_time >= KEEP_ALIVE_TIMEOUT:
-
                             yield ": keep-alive\n\n"
                             last_send_time = current_time
                             continue
@@ -1018,31 +1248,106 @@ async def chat_completions(request: Request):
                             chunk = result_queue.get(timeout=0.05)
                             if chunk is None:
                                 # 发送最终统计信息
-                                prompt_tokens = len(final_prompt) // 4  # 简单估算token数
-                                thinking_tokens = len(final_thinking) // 4  # 简单估算token数
-                                completion_tokens = len(final_text) // 4  # 简单估算token数
+                                prompt_tokens = (
+                                    len(final_prompt) // 4
+                                )  # 简单估算token数
+                                thinking_tokens = (
+                                    len(final_thinking) // 4
+                                )  # 简单估算token数
+                                completion_tokens = (
+                                    len(final_text) // 4
+                                )  # 简单估算token数
                                 usage = {
                                     "prompt_tokens": prompt_tokens,
-                                    "completion_tokens": thinking_tokens + completion_tokens,
-                                    "total_tokens": prompt_tokens + thinking_tokens + completion_tokens,
+                                    "completion_tokens": thinking_tokens
+                                    + completion_tokens,
+                                    "total_tokens": prompt_tokens
+                                    + thinking_tokens
+                                    + completion_tokens,
                                     "completion_tokens_details": {
                                         "reasoning_tokens": thinking_tokens
                                     },
                                 }
-                                finish_chunk = {
-                                    "id": completion_id,
-                                    "object": "chat.completion.chunk",
-                                    "created": created_time,
-                                    "model": model,
-                                    "choices": [
-                                        {
-                                            "delta": {},
-                                            "index": 0,
-                                            "finish_reason": "stop",
-                                        }
-                                    ],
-                                    "usage": usage,
-                                }
+
+                                # 检测工具调用
+                                detected_tools = []
+                                finish_reason = "stop"
+                                if tools and len(tools) > 0:
+                                    detected_tools = detect_tool_calls_in_response(
+                                        final_text, tools
+                                    )
+                                    if detected_tools:
+                                        finish_reason = "tool_calls"
+
+                                if detected_tools:
+                                    # 发送工具调用响应
+                                    tool_calls_chunks = []
+                                    for idx, tool_info in enumerate(detected_tools):
+                                        tool_call_id = generate_tool_call_id()
+                                        tool_calls_chunks.append(
+                                            {
+                                                "id": tool_call_id,
+                                                "type": "function",
+                                                "function": {
+                                                    "name": tool_info["name"],
+                                                    "arguments": json.dumps(
+                                                        tool_info.get("input", {}),
+                                                        ensure_ascii=False,
+                                                    ),
+                                                },
+                                            }
+                                        )
+
+                                    # 第一个 chunk 包含 role 和 tool_calls
+                                    first_tool_chunk = {
+                                        "id": completion_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": created_time,
+                                        "model": model,
+                                        "choices": [
+                                            {
+                                                "index": 0,
+                                                "delta": {
+                                                    "role": "assistant",
+                                                    "tool_calls": tool_calls_chunks,
+                                                },
+                                                "finish_reason": None,
+                                            }
+                                        ],
+                                    }
+                                    yield f"data: {json.dumps(first_tool_chunk, ensure_ascii=False)}\n\n"
+
+                                    # 最终 chunk
+                                    finish_chunk = {
+                                        "id": completion_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": created_time,
+                                        "model": model,
+                                        "choices": [
+                                            {
+                                                "delta": {},
+                                                "index": 0,
+                                                "finish_reason": "tool_calls",
+                                            }
+                                        ],
+                                        "usage": usage,
+                                    }
+                                else:
+                                    # 正常文本响应
+                                    finish_chunk = {
+                                        "id": completion_id,
+                                        "object": "chat.completion.chunk",
+                                        "created": created_time,
+                                        "model": model,
+                                        "choices": [
+                                            {
+                                                "delta": {},
+                                                "index": 0,
+                                                "finish_reason": finish_reason,
+                                            }
+                                        ],
+                                        "usage": usage,
+                                    }
                                 yield f"data: {json.dumps(finish_chunk, ensure_ascii=False)}\n\n"
                                 yield "data: [DONE]\n\n"
                                 last_send_time = current_time
@@ -1052,12 +1357,8 @@ async def chat_completions(request: Request):
                                 delta = choice.get("delta", {})
                                 ctype = delta.get("type")
                                 ctext = delta.get("content", "")
-                                if (
-                                    choice
-                                    .get("finish_reason")
-                                    == "backend_busy"
-                                ):
-                                    ctext = '服务器繁忙，请稍候再试'
+                                if choice.get("finish_reason") == "backend_busy":
+                                    ctext = "服务器繁忙，请稍候再试"
                                 if search_enabled and ctext.startswith("[citation:"):
                                     ctext = ""
                                 if ctype == "thinking":
@@ -1126,9 +1427,9 @@ async def chat_completions(request: Request):
                             logger.warning(f"[chat_completions] 解码失败: {e}")
                             # 根据当前处理类型添加错误消息
                             if ptype == "thinking":
-                                think_list.append('解码失败，请稍候再试')
+                                think_list.append("解码失败，请稍候再试")
                             else:
-                                text_list.append('解码失败，请稍候再试')
+                                text_list.append("解码失败，请稍候再试")
                             data_queue.put(None)
                             break
                         if not line:
@@ -1140,38 +1441,116 @@ async def chat_completions(request: Request):
                                 break
                             try:
                                 chunk = json.loads(data_str)
-            
+
                                 # 提取 v 字段
                                 if "v" in chunk:
                                     v_value = chunk["v"]
-                                    
-                                    if "p" in chunk and chunk.get("p") == "response/search_status":
+
+                                    if (
+                                        "p" in chunk
+                                        and chunk.get("p") == "response/search_status"
+                                    ):
                                         continue
-                                                
-                                    if "p" in chunk and chunk.get("p") == "response/thinking_content":
+
+                                    if (
+                                        "p" in chunk
+                                        and chunk.get("p")
+                                        == "response/thinking_content"
+                                    ):
                                         ptype = "thinking"
-                                    elif "p" in chunk and chunk.get("p") == "response/content":
+                                    elif (
+                                        "p" in chunk
+                                        and chunk.get("p") == "response/content"
+                                    ):
                                         ptype = "text"
-            
+
                                     # 处理字符串形式的 v 值（即文本内容）
                                     if isinstance(v_value, str):
-                                        if search_enabled and v_value.startswith("[citation:"):
+                                        if search_enabled and v_value.startswith(
+                                            "[citation:"
+                                        ):
                                             continue  # 跳过 citation 内容
                                         if ptype == "thinking":
                                             think_list.append(v_value)
                                         else:
                                             text_list.append(v_value)
-            
+
                                     # 处理数组更新如状态变更
                                     elif isinstance(v_value, list):
                                         for item in v_value:
-                                            if item.get("p") == "status" and item.get("v") == "FINISHED":
+                                            if (
+                                                item.get("p") == "status"
+                                                and item.get("v") == "FINISHED"
+                                            ):
                                                 # 构建最终结果
                                                 final_reasoning = "".join(think_list)
                                                 final_content = "".join(text_list)
-                                                prompt_tokens = len(final_prompt) // 4  # 简单估算token数
-                                                reasoning_tokens = len(final_reasoning) // 4  # 简单估算token数
-                                                completion_tokens = len(final_content) // 4  # 简单估算token数
+                                                prompt_tokens = (
+                                                    len(final_prompt) // 4
+                                                )  # 简单估算token数
+                                                reasoning_tokens = (
+                                                    len(final_reasoning) // 4
+                                                )  # 简单估算token数
+                                                completion_tokens = (
+                                                    len(final_content) // 4
+                                                )  # 简单估算token数
+
+                                                # 检测工具调用
+                                                detected_tools = []
+                                                finish_reason = "stop"
+                                                message_content = final_content
+                                                tool_calls_response = None
+
+                                                if tools and len(tools) > 0:
+                                                    detected_tools = (
+                                                        detect_tool_calls_in_response(
+                                                            final_content, tools
+                                                        )
+                                                    )
+                                                    if detected_tools:
+                                                        finish_reason = "tool_calls"
+                                                        tool_calls_response = []
+                                                        for tool_info in detected_tools:
+                                                            tool_call_id = (
+                                                                generate_tool_call_id()
+                                                            )
+                                                            tool_calls_response.append(
+                                                                {
+                                                                    "id": tool_call_id,
+                                                                    "type": "function",
+                                                                    "function": {
+                                                                        "name": tool_info[
+                                                                            "name"
+                                                                        ],
+                                                                        "arguments": json.dumps(
+                                                                            tool_info.get(
+                                                                                "input",
+                                                                                {},
+                                                                            ),
+                                                                            ensure_ascii=False,
+                                                                        ),
+                                                                    },
+                                                                }
+                                                            )
+                                                        # 工具调用时 content 设为 None
+                                                        message_content = None
+
+                                                message_obj = {
+                                                    "role": "assistant",
+                                                }
+                                                if message_content is not None:
+                                                    message_obj["content"] = (
+                                                        message_content
+                                                    )
+                                                if final_reasoning:
+                                                    message_obj["reasoning_content"] = (
+                                                        final_reasoning
+                                                    )
+                                                if tool_calls_response:
+                                                    message_obj["tool_calls"] = (
+                                                        tool_calls_response
+                                                    )
+
                                                 result = {
                                                     "id": completion_id,
                                                     "object": "chat.completion",
@@ -1180,18 +1559,17 @@ async def chat_completions(request: Request):
                                                     "choices": [
                                                         {
                                                             "index": 0,
-                                                            "message": {
-                                                                "role": "assistant",
-                                                                "content": final_content,
-                                                                "reasoning_content": final_reasoning,
-                                                            },
-                                                            "finish_reason": "stop",
+                                                            "message": message_obj,
+                                                            "finish_reason": finish_reason,
                                                         }
                                                     ],
                                                     "usage": {
                                                         "prompt_tokens": prompt_tokens,
-                                                        "completion_tokens": reasoning_tokens + completion_tokens,
-                                                        "total_tokens": prompt_tokens + reasoning_tokens + completion_tokens,
+                                                        "completion_tokens": reasoning_tokens
+                                                        + completion_tokens,
+                                                        "total_tokens": prompt_tokens
+                                                        + reasoning_tokens
+                                                        + completion_tokens,
                                                         "completion_tokens_details": {
                                                             "reasoning_tokens": reasoning_tokens
                                                         },
@@ -1199,33 +1577,78 @@ async def chat_completions(request: Request):
                                                 }
                                                 data_queue.put("DONE")
                                                 return  # 提前返回，结束函数
-            
+
                             except Exception as e:
-                                logger.warning(f"[collect_data] 无法解析: {data_str}, 错误: {e}")
+                                logger.warning(
+                                    f"[collect_data] 无法解析: {data_str}, 错误: {e}"
+                                )
                                 # 根据当前处理类型添加错误消息
                                 if ptype == "thinking":
-                                    think_list.append('解析失败，请稍候再试')
+                                    think_list.append("解析失败，请稍候再试")
                                 else:
-                                    text_list.append('解析失败，请稍候再试')
+                                    text_list.append("解析失败，请稍候再试")
                                 data_queue.put(None)
                                 break
                 except Exception as e:
                     logger.warning(f"[collect_data] 错误: {e}")
                     # 根据当前处理类型添加错误消息
                     if ptype == "thinking":
-                        think_list.append('处理失败，请稍候再试')
+                        think_list.append("处理失败，请稍候再试")
                     else:
-                        text_list.append('处理失败，请稍候再试')
+                        text_list.append("处理失败，请稍候再试")
                     data_queue.put(None)
                 finally:
                     deepseek_resp.close()
                     if result is None:
                         # 如果没有提前构造 result，则构造默认结果
                         final_content = "".join(text_list)
-                        final_reasoning = "".join(think_list)  # 修复：应该使用think_list而不是text_list
+                        final_reasoning = "".join(
+                            think_list
+                        )  # 修复：应该使用think_list而不是text_list
                         prompt_tokens = len(final_prompt) // 4  # 简单估算token数
                         reasoning_tokens = len(final_reasoning) // 4  # 简单估算token数
                         completion_tokens = len(final_content) // 4  # 简单估算token数
+
+                        # 检测工具调用
+                        detected_tools = []
+                        finish_reason = "stop"
+                        message_content = final_content
+                        tool_calls_response = None
+
+                        if tools and len(tools) > 0:
+                            detected_tools = detect_tool_calls_in_response(
+                                final_content, tools
+                            )
+                            if detected_tools:
+                                finish_reason = "tool_calls"
+                                tool_calls_response = []
+                                for tool_info in detected_tools:
+                                    tool_call_id = generate_tool_call_id()
+                                    tool_calls_response.append(
+                                        {
+                                            "id": tool_call_id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": tool_info["name"],
+                                                "arguments": json.dumps(
+                                                    tool_info.get("input", {}),
+                                                    ensure_ascii=False,
+                                                ),
+                                            },
+                                        }
+                                    )
+                                message_content = None
+
+                        message_obj = {
+                            "role": "assistant",
+                        }
+                        if message_content is not None:
+                            message_obj["content"] = message_content
+                        if final_reasoning:
+                            message_obj["reasoning_content"] = final_reasoning
+                        if tool_calls_response:
+                            message_obj["tool_calls"] = tool_calls_response
+
                         result = {
                             "id": completion_id,
                             "object": "chat.completion",
@@ -1234,18 +1657,17 @@ async def chat_completions(request: Request):
                             "choices": [
                                 {
                                     "index": 0,
-                                    "message": {
-                                        "role": "assistant",
-                                        "content": final_content,
-                                        "reasoning_content": final_reasoning,
-                                    },
-                                    "finish_reason": "stop",
+                                    "message": message_obj,
+                                    "finish_reason": finish_reason,
                                 }
                             ],
                             "usage": {
                                 "prompt_tokens": prompt_tokens,
-                                "completion_tokens": reasoning_tokens + completion_tokens,
-                                "total_tokens": prompt_tokens + reasoning_tokens + completion_tokens,
+                                "completion_tokens": reasoning_tokens
+                                + completion_tokens,
+                                "total_tokens": prompt_tokens
+                                + reasoning_tokens
+                                + completion_tokens,
                             },
                         }
                     data_queue.put("DONE")
@@ -1258,7 +1680,6 @@ async def chat_completions(request: Request):
                 while True:
                     current_time = time.time()
                     if current_time - last_send_time >= KEEP_ALIVE_TIMEOUT:
-
                         yield ""
                         last_send_time = current_time
                     if not collect_thread.is_alive() and result is not None:
@@ -1293,7 +1714,9 @@ async def claude_messages(request: Request):
                 status_code=exc.status_code, content={"error": exc.detail}
             )
         except Exception as exc:
-            logger.error(f"[claude_messages] determine_claude_mode_and_token 异常: {exc}")
+            logger.error(
+                f"[claude_messages] determine_claude_mode_and_token 异常: {exc}"
+            )
             return JSONResponse(
                 status_code=500, content={"error": "Claude authentication failed."}
             )
@@ -1301,12 +1724,12 @@ async def claude_messages(request: Request):
         req_data = await request.json()
         model = req_data.get("model")
         messages = req_data.get("messages", [])
-        
+
         if not model or not messages:
             raise HTTPException(
                 status_code=400, detail="Request must include 'model' and 'messages'."
             )
-        
+
         # 标准化消息内容 - 确保Claude Code兼容性
         normalized_messages = []
         for message in messages:
@@ -1330,11 +1753,11 @@ async def claude_messages(request: Request):
                 else:
                     normalized_message["content"] = ""
             normalized_messages.append(normalized_message)
-        
+
         # 处理工具使用请求
         tools_requested = req_data.get("tools") or []
         has_tools = len(tools_requested) > 0
-        
+
         # 检查是否包含工具结果（tool_result）
         has_tool_result = False
         for message in messages:
@@ -1347,27 +1770,29 @@ async def claude_messages(request: Request):
         # 处理Claude格式请求（使用标准化后的消息）
         payload = req_data.copy()
         payload["messages"] = normalized_messages.copy()
-        
+
         # 如果有工具定义，添加工具使用指导的系统消息
-        if has_tools and not any(m.get("role") == "system" for m in payload["messages"]):
+        if has_tools and not any(
+            m.get("role") == "system" for m in payload["messages"]
+        ):
             tool_schemas = []
             for tool in tools_requested:
-                tool_name = tool.get('name', 'unknown')
-                tool_desc = tool.get('description', 'No description available')
-                schema = tool.get('input_schema', {})
-                
+                tool_name = tool.get("name", "unknown")
+                tool_desc = tool.get("description", "No description available")
+                schema = tool.get("input_schema", {})
+
                 tool_info = f"Tool: {tool_name}\nDescription: {tool_desc}"
-                if 'properties' in schema:
+                if "properties" in schema:
                     props = []
-                    required = schema.get('required', [])
-                    for prop_name, prop_info in schema['properties'].items():
-                        prop_type = prop_info.get('type', 'string')
-                        is_req = ' (required)' if prop_name in required else ''
+                    required = schema.get("required", [])
+                    for prop_name, prop_info in schema["properties"].items():
+                        prop_type = prop_info.get("type", "string")
+                        is_req = " (required)" if prop_name in required else ""
                         props.append(f"  - {prop_name}: {prop_type}{is_req}")
                     if props:
                         tool_info += f"\nParameters:\n{chr(10).join(props)}"
                 tool_schemas.append(tool_info)
-            
+
             system_message = {
                 "role": "system",
                 "content": f"""You are Claude, a helpful AI assistant. You have access to these tools:
@@ -1397,51 +1822,58 @@ Examples:
 - For str_replace_editor: {{"name": "str_replace_editor", "input": {{"command": "create", "path": "file.py", "file_text": "code"}}}}
 - For Bash: {{"name": "Bash", "input": {{"command": "cd /path && python file.py"}}}}
 
-Remember: Output ONLY the JSON, no other text. The response must start with {{ and end with ]}}"""
+Remember: Output ONLY the JSON, no other text. The response must start with {{ and end with ]}}""",
             }
             payload["messages"].insert(0, system_message)
 
         deepseek_resp = await call_claude_via_openai(request, payload)
         if not deepseek_resp:
-            raise HTTPException(status_code=500, detail="Failed to get Claude response.")
+            raise HTTPException(
+                status_code=500, detail="Failed to get Claude response."
+            )
 
         created_time = int(time.time())
-        
+
         # 处理响应
         if deepseek_resp.status_code != 200:
             deepseek_resp.close()
             return JSONResponse(
-                status_code=500, 
-                content={"error": {"type": "api_error", "message": "Failed to get response"}}
+                status_code=500,
+                content={
+                    "error": {"type": "api_error", "message": "Failed to get response"}
+                },
             )
 
         # 流式响应或普通响应
         if bool(req_data.get("stream", False)):
+
             def claude_sse_stream():
                 try:
                     message_id = f"msg_{int(time.time())}_{random.randint(1000, 9999)}"
-                    input_tokens = sum(len(str(m.get("content", ""))) for m in messages) // 4
+                    input_tokens = (
+                        sum(len(str(m.get("content", ""))) for m in messages) // 4
+                    )
                     output_tokens = 0
-                    
+
                     # 收集所有响应内容
                     full_response_text = ""
                     response_completed = False
-                    
+
                     # 解析DeepSeek流式响应
                     for line in deepseek_resp.iter_lines():
                         if not line:
                             continue
                         try:
-                            line_str = line.decode('utf-8')
+                            line_str = line.decode("utf-8")
                         except Exception:
                             continue
-                            
-                        if line_str.startswith('data:'):
+
+                        if line_str.startswith("data:"):
                             data_str = line_str[5:].strip()
-                            if data_str == '[DONE]':
+                            if data_str == "[DONE]":
                                 response_completed = True
                                 break
-                                
+
                             try:
                                 chunk = json.loads(data_str)
                                 if "v" in chunk and isinstance(chunk["v"], str):
@@ -1449,14 +1881,17 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                                 elif "v" in chunk and isinstance(chunk["v"], list):
                                     # 检查完成状态
                                     for item in chunk["v"]:
-                                        if item.get("p") == "status" and item.get("v") == "FINISHED":
+                                        if (
+                                            item.get("p") == "status"
+                                            and item.get("v") == "FINISHED"
+                                        ):
                                             response_completed = True
                                             break
                             except (json.JSONDecodeError, KeyError):
                                 continue
-                    
+
                     # 现在一次性发送Claude格式的事件
-                    
+
                     # 1. message_start
                     message_start = {
                         "type": "message_start",
@@ -1468,74 +1903,86 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                             "content": [],
                             "stop_reason": None,
                             "stop_sequence": None,
-                            "usage": {"input_tokens": input_tokens, "output_tokens": 0}
-                        }
+                            "usage": {"input_tokens": input_tokens, "output_tokens": 0},
+                        },
                     }
                     yield f"data: {json.dumps(message_start)}\n\n"
-                    
+
                     # 2. 检查是否有工具调用 - 改进的检测逻辑
                     detected_tools = []
-                    
+
                     # 清理响应文本
                     cleaned_response = full_response_text.strip()
-                    
+
                     # 记录原始响应用于调试
-                    logger.debug(f"[Tool Detection] Raw response: {cleaned_response[:500] if cleaned_response else 'Empty'}")
-                    
+                    logger.debug(
+                        f"[Tool Detection] Raw response: {cleaned_response[:500] if cleaned_response else 'Empty'}"
+                    )
+
                     # 尝试多种工具调用检测方法
                     detected_tools = []
                     tool_detected = False
-                    
+
                     # 方法1: 检测完整的JSON格式
-                    if cleaned_response.startswith('{"tool_calls":') and cleaned_response.endswith(']}'):
+                    if cleaned_response.startswith(
+                        '{"tool_calls":'
+                    ) and cleaned_response.endswith("]}"):
                         logger.info(f"[Tool Detection] Method 1: Found tool calls JSON")
                         try:
                             tool_data = json.loads(cleaned_response)
-                            for tool_call in tool_data.get('tool_calls', []):
-                                tool_name = tool_call.get('name')
-                                tool_input = tool_call.get('input', {})
-                                
+                            for tool_call in tool_data.get("tool_calls", []):
+                                tool_name = tool_call.get("name")
+                                tool_input = tool_call.get("input", {})
+
                                 # 检查是否是有效的工具名称
-                                if any(tool.get('name') == tool_name for tool in tools_requested):
-                                    detected_tools.append({
-                                        'name': tool_name,
-                                        'input': tool_input
-                                    })
+                                if any(
+                                    tool.get("name") == tool_name
+                                    for tool in tools_requested
+                                ):
+                                    detected_tools.append(
+                                        {"name": tool_name, "input": tool_input}
+                                    )
                                     tool_detected = True
                         except json.JSONDecodeError:
                             pass
-                    
+
                     # 方法2: 使用正则表达式检测嵌入的JSON
                     if not tool_detected:
-                        tool_call_pattern = r'\{\s*["\']tool_calls["\']\s*:\s*\[(.*?)\]\s*\}'
-                        matches = re.findall(tool_call_pattern, cleaned_response, re.DOTALL)
-                        
+                        tool_call_pattern = (
+                            r'\{\s*["\']tool_calls["\']\s*:\s*\[(.*?)\]\s*\}'
+                        )
+                        matches = re.findall(
+                            tool_call_pattern, cleaned_response, re.DOTALL
+                        )
+
                         for match in matches:
                             try:
                                 # 尝试解析工具调用JSON
                                 tool_calls_json = f'{{"tool_calls": [{match}]}}'
                                 tool_data = json.loads(tool_calls_json)
-                                
-                                for tool_call in tool_data.get('tool_calls', []):
-                                    tool_name = tool_call.get('name')
-                                    tool_input = tool_call.get('input', {})
-                                    
+
+                                for tool_call in tool_data.get("tool_calls", []):
+                                    tool_name = tool_call.get("name")
+                                    tool_input = tool_call.get("input", {})
+
                                     # 检查是否是有效的工具名称
-                                    if any(tool.get('name') == tool_name for tool in tools_requested):
-                                        detected_tools.append({
-                                            'name': tool_name,
-                                            'input': tool_input
-                                        })
+                                    if any(
+                                        tool.get("name") == tool_name
+                                        for tool in tools_requested
+                                    ):
+                                        detected_tools.append(
+                                            {"name": tool_name, "input": tool_input}
+                                        )
                                         tool_detected = True
                             except json.JSONDecodeError:
                                 continue
-                    
+
                     # 方法3: 检测特定工具名称的直接调用 (已禁用以避免重复执行)
                     # 注意：这个方法可能导致Claude Code重复执行命令
                     # 当检测到工具名但没有具体参数时，它会返回空的input
                     # Claude Code接收到这种响应后会尝试重新执行
                     # 因此暂时禁用此方法，只依赖方法1和方法2的精确JSON匹配
-                    '''
+                    """
                     if not tool_detected:
                         for tool in tools_requested:
                             tool_name = tool.get('name')
@@ -1548,20 +1995,20 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                                 })
                                 tool_detected = True
                                 break
-                    '''
-                    
+                    """
+
                     content_index = 0
                     if detected_tools:
                         # 有工具调用
                         stop_reason = "tool_use"
                         for tool_info in detected_tools:
                             tool_use_id = f"toolu_{int(time.time())}_{random.randint(1000, 9999)}_{content_index}"
-                            tool_name = tool_info['name']
-                            tool_input = tool_info['input']
-                            
+                            tool_name = tool_info["name"]
+                            tool_input = tool_info["input"]
+
                             # content_block_start
                             yield f"data: {json.dumps({'type': 'content_block_start', 'index': content_index, 'content_block': {'type': 'tool_use', 'id': tool_use_id, 'name': tool_name, 'input': tool_input}})}\n\n"
-                            
+
                             # content_block_stop
                             yield f"data: {json.dumps({'type': 'content_block_stop', 'index': content_index})}\n\n"
 
@@ -1579,12 +2026,15 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                     # 3. message_delta 和 message_stop
                     yield f"data: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"
                     yield f"data: {json.dumps({'type': 'message_stop'})}\n\n"
-                        
+
                 except Exception as e:
                     logger.error(f"[claude_sse_stream] 异常: {e}")
                     error_event = {
                         "type": "error",
-                        "error": {"type": "api_error", "message": f"Stream processing error: {str(e)}"}
+                        "error": {
+                            "type": "api_error",
+                            "message": f"Stream processing error: {str(e)}",
+                        },
                     }
                     yield f"data: {json.dumps(error_event)}\n\n"
                 finally:
@@ -1592,7 +2042,7 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                         deepseek_resp.close()
                     except Exception:
                         pass
-                    # 释放账号资源 
+                    # 释放账号资源
                     if getattr(request.state, "use_config_token", False) and hasattr(
                         request.state, "account"
                     ):
@@ -1608,124 +2058,146 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
             try:
                 final_content = ""
                 final_reasoning = ""
-                
+
                 for line in deepseek_resp.iter_lines():
                     if not line:
                         continue
-                    
+
                     try:
-                        line_str = line.decode('utf-8')
+                        line_str = line.decode("utf-8")
                     except Exception as e:
                         logger.warning(f"[claude_messages] 行解码失败: {e}")
                         continue
-                        
-                    if line_str.startswith('data:'):
+
+                    if line_str.startswith("data:"):
                         data_str = line_str[5:].strip()
-                        if data_str == '[DONE]':
+                        if data_str == "[DONE]":
                             break
-                        
+
                         try:
                             chunk = json.loads(data_str)
-                            
+
                             # 使用DeepSeek的响应格式解析 - 提取 v 字段
                             if "v" in chunk:
                                 v_value = chunk["v"]
-                                
+
                                 # 跳过搜索状态
-                                if "p" in chunk and chunk.get("p") == "response/search_status":
+                                if (
+                                    "p" in chunk
+                                    and chunk.get("p") == "response/search_status"
+                                ):
                                     continue
-                                    
+
                                 # 判断内容类型
                                 ptype = "text"
-                                if "p" in chunk and chunk.get("p") == "response/thinking_content":
+                                if (
+                                    "p" in chunk
+                                    and chunk.get("p") == "response/thinking_content"
+                                ):
                                     ptype = "thinking"
-                                elif "p" in chunk and chunk.get("p") == "response/content":
+                                elif (
+                                    "p" in chunk
+                                    and chunk.get("p") == "response/content"
+                                ):
                                     ptype = "text"
-                                
+
                                 # 处理字符串形式的 v 值（即文本内容）
                                 if isinstance(v_value, str):
                                     if ptype == "thinking":
                                         final_reasoning += v_value
                                     else:
                                         final_content += v_value
-                                        
+
                                 # 处理数组更新如状态变更
                                 elif isinstance(v_value, list):
                                     for item in v_value:
-                                        if item.get("p") == "status" and item.get("v") == "FINISHED":
+                                        if (
+                                            item.get("p") == "status"
+                                            and item.get("v") == "FINISHED"
+                                        ):
                                             # 完成标志
                                             break
-                                            
+
                         except json.JSONDecodeError as e:
-                            logger.warning(f"[claude_messages] JSON解析失败: {e}, data: {data_str}")
+                            logger.warning(
+                                f"[claude_messages] JSON解析失败: {e}, data: {data_str}"
+                            )
                             continue
                         except Exception as e:
                             logger.warning(f"[claude_messages] chunk处理失败: {e}")
                             continue
-                
+
                 try:
                     deepseek_resp.close()
                 except Exception as e:
                     logger.warning(f"[claude_messages] 关闭响应异常: {e}")
-                
+
                 # 检查是否包含工具调用 - 改进的检测逻辑
                 detected_tools = []
-                
+
                 # 清理响应文本
                 cleaned_content = final_content.strip()
-                
+
                 # 尝试多种工具调用检测方法
                 tool_detected = False
-                
+
                 # 方法1: 检测完整的JSON格式
-                if cleaned_content.startswith('{"tool_calls":') and cleaned_content.endswith(']}'):
+                if cleaned_content.startswith(
+                    '{"tool_calls":'
+                ) and cleaned_content.endswith("]}"):
                     try:
                         tool_data = json.loads(cleaned_content)
-                        for tool_call in tool_data.get('tool_calls', []):
-                            tool_name = tool_call.get('name')
-                            tool_input = tool_call.get('input', {})
-                            
+                        for tool_call in tool_data.get("tool_calls", []):
+                            tool_name = tool_call.get("name")
+                            tool_input = tool_call.get("input", {})
+
                             # 检查是否是有效的工具名称
-                            if any(tool.get('name') == tool_name for tool in tools_requested):
-                                detected_tools.append({
-                                    'name': tool_name,
-                                    'input': tool_input
-                                })
+                            if any(
+                                tool.get("name") == tool_name
+                                for tool in tools_requested
+                            ):
+                                detected_tools.append(
+                                    {"name": tool_name, "input": tool_input}
+                                )
                                 tool_detected = True
                     except json.JSONDecodeError:
                         pass
-                
+
                 # 方法2: 使用正则表达式检测嵌入的JSON
                 if not tool_detected:
-                    tool_call_pattern = r'\{\s*["\']tool_calls["\']\s*:\s*\[(.*?)\]\s*\}'
+                    tool_call_pattern = (
+                        r'\{\s*["\']tool_calls["\']\s*:\s*\[(.*?)\]\s*\}'
+                    )
                     matches = re.findall(tool_call_pattern, cleaned_content, re.DOTALL)
-                    
+
                     for match in matches:
                         try:
                             # 尝试解析工具调用JSON
                             tool_calls_json = f'{{"tool_calls": [{match}]}}'
                             tool_data = json.loads(tool_calls_json)
-                            
-                            for tool_call in tool_data.get('tool_calls', []):
-                                tool_name = tool_call.get('name')
-                                tool_input = tool_call.get('input', {})
-                                
+
+                            for tool_call in tool_data.get("tool_calls", []):
+                                tool_name = tool_call.get("name")
+                                tool_input = tool_call.get("input", {})
+
                                 # 检查是否是有效的工具名称
-                                if any(tool.get('name') == tool_name for tool in tools_requested):
-                                    detected_tools.append({
-                                        'name': tool_name,
-                                        'input': tool_input
-                                    })
+                                if any(
+                                    tool.get("name") == tool_name
+                                    for tool in tools_requested
+                                ):
+                                    detected_tools.append(
+                                        {"name": tool_name, "input": tool_input}
+                                    )
                                     tool_detected = True
                         except json.JSONDecodeError:
                             continue
-                
+
                 # 方法3: 检测特定工具名称的直接调用 (已禁用以避免重复执行)
                 # 注意：这个方法可能导致Claude Code重复执行命令
                 # 当检测到工具名但没有具体参数时，它会返回空的input
                 # Claude Code接收到这种响应后会尝试重新执行
                 # 因此暂时禁用此方法，只依赖方法1和方法2的精确JSON匹配
-                '''
+                """
                 if not tool_detected:
                     for tool in tools_requested:
                         tool_name = tool.get('name')
@@ -1738,8 +2210,8 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                             })
                             tool_detected = True
                             break
-                '''
-                
+                """
+
                 # 构造标准的Anthropic Messages API响应格式
                 claude_response = {
                     "id": f"msg_{int(time.time())}_{random.randint(1000, 9999)}",
@@ -1751,40 +2223,47 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                     "stop_sequence": None,
                     "usage": {
                         "input_tokens": len(str(normalized_messages)) // 4,
-                        "output_tokens": (len(final_content) + len(final_reasoning)) // 4
-                    }
+                        "output_tokens": (len(final_content) + len(final_reasoning))
+                        // 4,
+                    },
                 }
-                
+
                 # 如果有推理内容，添加思考块
                 if final_reasoning:
-                    claude_response["content"].append({
-                        "type": "thinking",
-                        "thinking": final_reasoning
-                    })
-                
+                    claude_response["content"].append(
+                        {"type": "thinking", "thinking": final_reasoning}
+                    )
+
                 # 处理工具调用
                 if detected_tools:
                     for i, tool_info in enumerate(detected_tools):
-                        tool_use_id = f"toolu_{int(time.time())}_{random.randint(1000, 9999)}_{i}"
-                        tool_name = tool_info['name']
-                        tool_input = tool_info['input']
-                        
-                        claude_response["content"].append({
-                            "type": "tool_use",
-                            "id": tool_use_id,
-                            "name": tool_name,
-                            "input": tool_input
-                        })
+                        tool_use_id = (
+                            f"toolu_{int(time.time())}_{random.randint(1000, 9999)}_{i}"
+                        )
+                        tool_name = tool_info["name"]
+                        tool_input = tool_info["input"]
+
+                        claude_response["content"].append(
+                            {
+                                "type": "tool_use",
+                                "id": tool_use_id,
+                                "name": tool_name,
+                                "input": tool_input,
+                            }
+                        )
                 else:
                     # 没有工具调用，添加普通文本内容
                     if final_content or not final_reasoning:
-                        claude_response["content"].append({
-                            "type": "text",
-                            "text": final_content or "抱歉，没有生成有效的响应内容。"
-                        })
-                
+                        claude_response["content"].append(
+                            {
+                                "type": "text",
+                                "text": final_content
+                                or "抱歉，没有生成有效的响应内容。",
+                            }
+                        )
+
                 return JSONResponse(content=claude_response, status_code=200)
-                
+
             except Exception as e:
                 logger.error(f"[claude_messages] 非流式响应处理异常: {e}")
                 try:
@@ -1792,15 +2271,28 @@ Remember: Output ONLY the JSON, no other text. The response must start with {{ a
                 except Exception as close_e:
                     logger.warning(f"[claude_messages] 关闭响应异常2: {close_e}")
                 return JSONResponse(
-                    status_code=500, 
-                    content={"error": {"type": "api_error", "message": "Response processing error"}}
+                    status_code=500,
+                    content={
+                        "error": {
+                            "type": "api_error",
+                            "message": "Response processing error",
+                        }
+                    },
                 )
 
     except HTTPException as exc:
-        return JSONResponse(status_code=exc.status_code, content={"error": {"type": "invalid_request_error", "message": exc.detail}})
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"type": "invalid_request_error", "message": exc.detail}},
+        )
     except Exception as exc:
         logger.error(f"[claude_messages] 未知异常: {exc}")
-        return JSONResponse(status_code=500, content={"error": {"type": "api_error", "message": "Internal Server Error"}})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {"type": "api_error", "message": "Internal Server Error"}
+            },
+        )
     finally:
         # 释放账号资源
         if getattr(request.state, "use_config_token", False) and hasattr(
@@ -1823,7 +2315,9 @@ async def claude_count_tokens(request: Request):
                 status_code=exc.status_code, content={"error": exc.detail}
             )
         except Exception as exc:
-            logger.error(f"[claude_count_tokens] determine_claude_mode_and_token 异常: {exc}")
+            logger.error(
+                f"[claude_count_tokens] determine_claude_mode_and_token 异常: {exc}"
+            )
             return JSONResponse(
                 status_code=500, content={"error": "Claude authentication failed."}
             )
@@ -1832,45 +2326,54 @@ async def claude_count_tokens(request: Request):
         model = req_data.get("model")
         messages = req_data.get("messages", [])
         system = req_data.get("system", "")
-        
+
         if not model or not messages:
             raise HTTPException(
                 status_code=400, detail="Request must include 'model' and 'messages'."
             )
-        
+
         # 计算输入token数量
         def estimate_tokens(text):
             """简单的token估算，约4个字符=1个token"""
             if isinstance(text, str):
                 return len(text) // 4
             elif isinstance(text, list):
-                return sum(estimate_tokens(item.get("text", "")) if isinstance(item, dict) else estimate_tokens(str(item)) for item in text)
+                return sum(
+                    estimate_tokens(item.get("text", ""))
+                    if isinstance(item, dict)
+                    else estimate_tokens(str(item))
+                    for item in text
+                )
             else:
                 return len(str(text)) // 4
-        
+
         # 计算消息的token数量
         input_tokens = 0
-        
+
         # 添加系统消息的token
         if system:
             input_tokens += estimate_tokens(system)
-            
+
         # 添加消息列表的token
         for message in messages:
             role = message.get("role", "")
             content = message.get("content", "")
-            
+
             # 角色标记大约占用2个token
             input_tokens += 2
-            
+
             # 内容token计算
             if isinstance(content, list):
                 for content_block in content:
                     if isinstance(content_block, dict):
                         if content_block.get("type") == "text":
-                            input_tokens += estimate_tokens(content_block.get("text", ""))
+                            input_tokens += estimate_tokens(
+                                content_block.get("text", "")
+                            )
                         elif content_block.get("type") == "tool_result":
-                            input_tokens += estimate_tokens(content_block.get("content", ""))
+                            input_tokens += estimate_tokens(
+                                content_block.get("content", "")
+                            )
                         else:
                             # 其他类型的内容块
                             input_tokens += estimate_tokens(str(content_block))
@@ -1878,7 +2381,7 @@ async def claude_count_tokens(request: Request):
                         input_tokens += estimate_tokens(str(content_block))
             else:
                 input_tokens += estimate_tokens(content)
-        
+
         # 处理工具定义
         tools = req_data.get("tools", [])
         if tools:
@@ -1886,23 +2389,33 @@ async def claude_count_tokens(request: Request):
                 # 工具名称和描述
                 input_tokens += estimate_tokens(tool.get("name", ""))
                 input_tokens += estimate_tokens(tool.get("description", ""))
-                
+
                 # 工具参数schema
                 input_schema = tool.get("input_schema", {})
-                input_tokens += estimate_tokens(json.dumps(input_schema, ensure_ascii=False))
-        
+                input_tokens += estimate_tokens(
+                    json.dumps(input_schema, ensure_ascii=False)
+                )
+
         # 构造响应
         response = {
             "input_tokens": max(1, input_tokens)  # 至少1个token
         }
-        
+
         return JSONResponse(content=response, status_code=200)
-        
+
     except HTTPException as exc:
-        return JSONResponse(status_code=exc.status_code, content={"error": {"type": "invalid_request_error", "message": exc.detail}})
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"error": {"type": "invalid_request_error", "message": exc.detail}},
+        )
     except Exception as exc:
         logger.error(f"[claude_count_tokens] 未知异常: {exc}")
-        return JSONResponse(status_code=500, content={"error": {"type": "api_error", "message": "Internal Server Error"}})
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {"type": "api_error", "message": "Internal Server Error"}
+            },
+        )
 
 
 # ----------------------------------------------------------------------
