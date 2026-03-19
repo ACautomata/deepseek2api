@@ -1385,6 +1385,7 @@ async def chat_completions(request: Request):
                                         tool_call_id = generate_tool_call_id()
                                         tool_calls_chunks.append(
                                             {
+                                                "index": idx,
                                                 "id": tool_call_id,
                                                 "type": "function",
                                                 "function": {
